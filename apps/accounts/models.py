@@ -134,3 +134,20 @@ class DailyWorkLog(models.Model):
     def __str__(self):
         return f"{self.user.email} - {self.date}"
 
+
+class UserOTP(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='otps')
+    otp = models.CharField(max_length=6)
+    purpose = models.CharField(max_length=50, default='login')  # 'login' or 'password_change'
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_verified = models.BooleanField(default=False)
+
+    def is_valid(self):
+        from django.utils import timezone
+        import datetime
+        return not self.is_verified and (timezone.now() - self.created_at) < datetime.timedelta(minutes=10)
+
+    def __str__(self):
+        return f"{self.user.email} - {self.otp} - {self.purpose}"
+
+

@@ -17,8 +17,8 @@ keepalive = 5
 proc_name = "dps_os"
 
 # Logging
-accesslog = "/home/dps/dps-os/backend/logs/gunicorn_access.log"
-errorlog  = "/home/dps/dps-os/backend/logs/gunicorn_error.log"
+accesslog = "./logs/gunicorn_access.log"
+errorlog  = "./logs/gunicorn_error.log"
 loglevel  = "warning"
 
 # Reload on code changes (disable in production once stable)

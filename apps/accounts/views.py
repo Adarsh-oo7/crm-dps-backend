@@ -8,8 +8,131 @@ from .serializers import UserSerializer, CustomTokenObtainPairSerializer, Change
 
 User = get_user_model()
 
+import random
+import logging
+from django.conf import settings
+from django.core.mail import send_mail
+from rest_framework_simplejwt.tokens import RefreshToken
+from .models import UserOTP
+
+log = logging.getLogger(__name__)
+
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception:
+            return Response({"detail": "No active account found with the given credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        user = serializer.user
+        if user.role == 'superadmin':
+            # Generate 6-digit OTP
+            otp_val = str(random.randint(100000, 999999))
+            UserOTP.objects.filter(user=user, purpose='login').update(is_verified=True) # invalidate old ones
+            UserOTP.objects.create(user=user, otp=otp_val, purpose='login')
+            
+            # Send Email
+            subject = "🔒 Your DPS OS Verification Code"
+            body = (
+                f"Hi {user.full_name or 'Superadmin'},\n\n"
+                f"Please use the following 6-digit verification code to complete your login:\n\n"
+                f"   ⚡  {otp_val}  ⚡\n\n"
+                f"This code will expire in 10 minutes.\n\n"
+                f"— DPS OS Security Team"
+            )
+            try:
+                send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
+            except Exception as e:
+                log.error(f"Failed to send OTP email: {e}")
+                return Response({"detail": f"Failed to send verification email: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            return Response({"otp_required": True, "email": user.email}, status=status.HTTP_200_OK)
+            
+        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+
+class VerifyOTPView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        email = request.data.get('email')
+        otp_val = request.data.get('otp')
+        
+        if not email or not otp_val:
+            return Response({"detail": "Email and OTP are required."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+            
+        # Check latest OTP
+        latest_otp = UserOTP.objects.filter(user=user, purpose='login').order_by('-created_at').first()
+        
+        if not latest_otp or latest_otp.otp != otp_val or not latest_otp.is_valid():
+            return Response({"otp": ["Invalid or expired verification code."]}, status=status.HTTP_400_BAD_REQUEST)
+            
+        latest_otp.is_verified = True
+        latest_otp.save()
+        
+        # Generate JWT tokens
+        refresh = RefreshToken.for_user(user)
+        data = {
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+            'user': UserSerializer(user).data
+        }
+        return Response(data, status=status.HTTP_200_OK)
+
+class RequestPasswordOTPView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        otp_val = str(random.randint(100000, 999999))
+        UserOTP.objects.filter(user=user, purpose='password_change').update(is_verified=True) # invalidate old
+        UserOTP.objects.create(user=user, otp=otp_val, purpose='password_change')
+        
+        subject = "🔑 Your DPS OS Password Reset Verification Code"
+        body = (
+            f"Hi {user.full_name or 'there'},\n\n"
+            f"Please use the following 6-digit verification code to reset/change your profile password:\n\n"
+            f"   ⚡  {otp_val}  ⚡\n\n"
+            f"This code will expire in 10 minutes.\n\n"
+            f"— DPS OS Security Team"
+        )
+        try:
+            send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
+        except Exception as e:
+            return Response({"detail": f"Failed to send email: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+        return Response({"detail": "Verification code has been sent to your email."}, status=status.HTTP_200_OK)
+
+class ChangePasswordOTPView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        otp_val = request.data.get('otp')
+        new_password = request.data.get('new_password')
+        
+        if not otp_val or not new_password:
+            return Response({"detail": "OTP and new password are required."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        latest_otp = UserOTP.objects.filter(user=user, purpose='password_change').order_by('-created_at').first()
+        
+        if not latest_otp or latest_otp.otp != otp_val or not latest_otp.is_valid():
+            return Response({"otp": ["Invalid or expired verification code."]}, status=status.HTTP_400_BAD_REQUEST)
+            
+        latest_otp.is_verified = True
+        latest_otp.save()
+        
+        user.set_password(new_password)
+        user.save()
+        
+        return Response({"detail": "Password has been successfully updated."}, status=status.HTTP_200_OK)
 
 class UserProfileView(generics.RetrieveUpdateAPIView):
     serializer_class = UserSerializer
@@ -36,8 +159,6 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
-        # On frontend, tokens are deleted. We can simply return a success message.
-        # If Token Blacklisting is enabled in future, blacklist the refresh token here.
         return Response({"detail": "Successfully logged out."}, status=status.HTTP_200_OK)
 
 
@@ -60,13 +181,55 @@ class TeamMemberViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         if request.user.role != 'superadmin':
             return Response({"detail": "Only superadmin can add new team members."}, status=status.HTTP_403_FORBIDDEN)
-        return super().create(request, *args, **kwargs)
+        
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        
+        password = request.data.get('password', 'DpsUser@123')
+        user = serializer.instance
+        
+        subject = "🎉 Welcome to DPS OS — Account Created"
+        body = (
+            f"Hi {user.full_name or 'Team Member'},\n\n"
+            f"Your account has been created on DPS OS by the administrator.\n\n"
+            f"Here are your login credentials:\n"
+            f"  •  Email: {user.email}\n"
+            f"  •  Password: {password}\n\n"
+            f"Log in here: https://crm.digitalproductsolutions.in/login\n\n"
+            f"— DPS OS Admin Team"
+        )
+        try:
+            send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
+        except Exception as e:
+            log.error(f"Failed to send welcome email: {e}")
+            
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def update(self, request, *args, **kwargs):
         member = self.get_object()
         if request.user.role not in ['superadmin', 'admin'] and request.user.id != member.id:
             return Response({"detail": "You do not have permission to edit this profile."}, status=status.HTTP_403_FORBIDDEN)
-        return super().update(request, *args, **kwargs)
+        
+        password = request.data.get('password')
+        response = super().update(request, *args, **kwargs)
+        
+        if password and request.user.role in ['superadmin', 'admin']:
+            subject = "🔒 Your DPS OS Password has been reset"
+            body = (
+                f"Hi {member.full_name or member.email},\n\n"
+                f"Your account password has been updated by the administrator.\n\n"
+                f"Your new password is: {password}\n\n"
+                f"Please log in and update your password: https://crm.digitalproductsolutions.in/login\n\n"
+                f"— DPS OS Admin Team"
+            )
+            try:
+                send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [member.email], fail_silently=False)
+            except Exception as e:
+                log.error(f"Failed to send password reset email: {e}")
+                
+        return response
 
     def destroy(self, request, *args, **kwargs):
         if request.user.role != 'superadmin':
