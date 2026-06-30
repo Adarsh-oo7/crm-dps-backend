@@ -269,6 +269,12 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             }
         )
         if not created:
+            if attendance.check_out is not None:
+                attendance.check_in = timezone.localtime().time()
+                attendance.check_out = None
+                attendance._skip_recalc = True
+                attendance.save()
+                return Response(AttendanceSerializer(attendance).data, status=status.HTTP_200_OK)
             return Response({"detail": "Already checked in today."}, status=status.HTTP_400_BAD_REQUEST)
         return Response(AttendanceSerializer(attendance).data, status=status.HTTP_201_CREATED)
 
@@ -280,7 +286,21 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         except Attendance.DoesNotExist:
             return Response({"detail": "No check-in found for today."}, status=status.HTTP_400_BAD_REQUEST)
         
-        attendance.check_out = timezone.localtime().time()
+        if attendance.check_out is not None:
+            return Response({"detail": "Already checked out."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        now_time = timezone.localtime().time()
+        import datetime
+        h1, m1, s1 = attendance.check_in.hour, attendance.check_in.minute, attendance.check_in.second
+        h2, m2, s2 = now_time.hour, now_time.minute, now_time.second
+        t1 = datetime.timedelta(hours=h1, minutes=m1, seconds=s1)
+        t2 = datetime.timedelta(hours=h2, minutes=m2, seconds=s2)
+        session_duration = max(0.0, (t2 - t1).total_seconds() / 3600.0)
+        
+        current_accumulated = float(attendance.duration_hours or 0.0)
+        attendance.duration_hours = current_accumulated + session_duration
+        attendance.check_out = now_time
+        attendance._skip_recalc = True
         attendance.save()
         return Response(AttendanceSerializer(attendance).data, status=status.HTTP_200_OK)
 

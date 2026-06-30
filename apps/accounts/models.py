@@ -75,6 +75,10 @@ class Attendance(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
+        if getattr(self, '_skip_recalc', False):
+            super().save(*args, **kwargs)
+            return
+            
         if self.check_in and self.check_out:
             import datetime
             h1, m1, s1 = self.check_in.hour, self.check_in.minute, self.check_in.second
