@@ -32,3 +32,28 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.title} for {self.user.email} ({self.created_at})"
+
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        if is_new:
+            try:
+                from django.core.mail import send_mail
+                from django.conf import settings
+                subject = f"[DPS OS] {self.title}"
+                html_message = f"<p>{self.message}</p>"
+                if self.related_url:
+                    frontend_base = "https://crm.digitalproductsolutions.in"
+                    full_url = f"{frontend_base}{self.related_url}"
+                    html_message += f"<p><a href='{full_url}'>Click here to view</a></p>"
+                send_mail(
+                    subject=subject,
+                    message=self.message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[self.user.email],
+                    html_message=html_message,
+                    fail_silently=True
+                )
+                Notification.objects.filter(pk=self.pk).update(sent_via_email=True)
+            except Exception:
+                pass
