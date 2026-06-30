@@ -111,6 +111,35 @@ class Task(models.Model):
         )['total'] or 0
         return round(total_minutes / 60.0, 2)
 
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        old_assigned_to = None
+        if not is_new:
+            try:
+                old_assigned_to = Task.objects.get(pk=self.pk).assigned_to
+            except Task.DoesNotExist:
+                pass
+        
+        super().save(*args, **kwargs)
+        
+        if self.assigned_to and (is_new or old_assigned_to != self.assigned_to):
+            try:
+                from apps.notifications.models import Notification
+                assigned_by_name = (
+                    self.assigned_by.full_name if (self.assigned_by and self.assigned_by.full_name)
+                    else (self.assigned_by.email if self.assigned_by else "System")
+                )
+                Notification.objects.create(
+                    user=self.assigned_to,
+                    title="New Task Assigned",
+                    message=f"You have been assigned a new task: '{self.title}' by {assigned_by_name}.",
+                    notification_type="Task",
+                    related_url="/tasks"
+                )
+            except Exception as e:
+                # Don't fail the save if notification fails
+                pass
+
 
 class TaskChecklistItem(models.Model):
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='checklist_items')
