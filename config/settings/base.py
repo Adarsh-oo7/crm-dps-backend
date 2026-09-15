@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'apps.knowledge',
     'apps.servers',
     'apps.products',
+    'apps.whatsapp',
 ]
 
 MIDDLEWARE = [
@@ -159,3 +160,11 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='DPS OS <noreply@digitalprod.com>')
+
+# WhatsApp Cloud API (Meta)
+WHATSAPP_ACCESS_TOKEN = config('WHATSAPP_ACCESS_TOKEN', default='')
+WHATSAPP_PHONE_NUMBER_ID = config('WHATSAPP_PHONE_NUMBER_ID', default='1294620783743190')
+WHATSAPP_VERIFY_TOKEN = config('WHATSAPP_VERIFY_TOKEN', default='DpsWaVerify_9447845185')
+WHATSAPP_APP_SECRET = config('WHATSAPP_APP_SECRET', default='')
+WHATSAPP_GRAPH_VERSION = config('WHATSAPP_GRAPH_VERSION', default='v21.0')
+WHATSAPP_DISPLAY_NUMBER = config('WHATSAPP_DISPLAY_NUMBER', default='+91 94478 45185')

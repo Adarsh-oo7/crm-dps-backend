@@ -35,6 +35,7 @@ urlpatterns = [
     path("api/products/", include("apps.products.urls")),
     path("api/servers/", include("apps.servers.urls")),
     path("api/knowledge/", include("apps.knowledge.urls")),
+    path("api/whatsapp/", include("apps.whatsapp.urls")),
     path("api/team/", include("apps.accounts.urls_team")),
     path("api/", include("apps.reports.urls")),
 ]
