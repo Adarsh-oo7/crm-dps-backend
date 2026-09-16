@@ -2,6 +2,32 @@ from django.conf import settings
 from django.db import models
 
 
+class WhatsAppAccount(models.Model):
+    waba_id = models.CharField(max_length=32, blank=True)
+    phone_number_id = models.CharField(max_length=32)
+    display_phone_number = models.CharField(max_length=32, blank=True)
+    verified_name = models.CharField(max_length=255, blank=True)
+    business_id = models.CharField(max_length=32, blank=True)
+    access_token = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    connected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="whatsapp_accounts",
+    )
+    raw_session = models.JSONField(default=dict, blank=True)
+    connected_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-connected_at"]
+
+    def __str__(self):
+        return self.display_phone_number or self.phone_number_id
+
+
 class WhatsAppContact(models.Model):
     wa_id = models.CharField(max_length=32, unique=True, db_index=True)
     profile_name = models.CharField(max_length=255, blank=True)

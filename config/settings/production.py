@@ -94,6 +94,11 @@ LOGGING = {
             'level': 'WARNING',
             'propagate': False,
         },
+        'apps.whatsapp': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }
 

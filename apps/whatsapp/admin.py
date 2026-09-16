@@ -1,5 +1,11 @@
 from django.contrib import admin
-from .models import WhatsAppContact, WhatsAppMessage
+from .models import WhatsAppAccount, WhatsAppContact, WhatsAppMessage
+
+
+@admin.register(WhatsAppAccount)
+class WhatsAppAccountAdmin(admin.ModelAdmin):
+    list_display = ("display_phone_number", "phone_number_id", "verified_name", "is_active", "connected_at")
+    readonly_fields = ("access_token",)
 
 
 @admin.register(WhatsAppContact)
