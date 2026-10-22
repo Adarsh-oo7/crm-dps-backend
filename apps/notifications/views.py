@@ -10,15 +10,21 @@ class NotificationViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Return only the current user's notifications (latest 50)
-        return Notification.objects.filter(user=self.request.user).order_by('-created_at')[:50]
+        # Return only the current user's notifications
+        return Notification.objects.filter(user=self.request.user).order_by('-created_at')
 
-    # PATCH /api/notifications/{id}/read/
-    @action(detail=True, methods=['patch'], url_path='read')
+    def list(self, request, *args, **kwargs):
+        # Limit to latest 50 notifications on list
+        queryset = self.filter_queryset(self.get_queryset())[:50]
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    # PATCH or POST /api/notifications/{id}/read/
+    @action(detail=True, methods=['patch', 'post'], url_path='read')
     def mark_read(self, request, pk=None):
         notification = self.get_object()
         notification.is_read = True
-        notification.save()
+        notification.save(update_fields=['is_read'])
         return Response(NotificationSerializer(notification).data)
 
     # POST /api/notifications/mark-all-read/
