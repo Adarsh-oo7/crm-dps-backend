@@ -93,7 +93,7 @@ class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
         fields = '__all__'
-        read_only_fields = ('recorded_by',)
+        read_only_fields = ('recorded_by', 'invoice')
 
 class ExpenseSerializer(serializers.ModelSerializer):
     paid_by_detail = UserShortSerializer(source='paid_by', read_only=True)
