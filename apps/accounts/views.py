@@ -14,6 +14,7 @@ from django.conf import settings
 from django.core.mail import send_mail
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import UserOTP
+from .access import can_manage_people
 
 log = logging.getLogger(__name__)
 
@@ -253,7 +254,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        if self.request.user.role in ['superadmin', 'admin', 'manager']:
+        if can_manage_people(self.request.user):
             return Attendance.objects.all().order_by('-date', '-check_in')
         return Attendance.objects.filter(user=self.request.user).order_by('-date', '-check_in')
 
@@ -311,7 +312,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='today')
     def today_attendance(self, request):
-        if request.user.role not in ['superadmin', 'admin', 'manager']:
+        if not can_manage_people(request.user):
             return Response({"detail": "Access denied."}, status=status.HTTP_403_FORBIDDEN)
         today = timezone.localdate()
         queryset = Attendance.objects.filter(date=today)
@@ -322,7 +323,7 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        if self.request.user.role in ['superadmin', 'admin', 'manager']:
+        if can_manage_people(self.request.user):
             return LeaveRequest.objects.all().order_by('-created_at')
         return LeaveRequest.objects.filter(user=self.request.user).order_by('-created_at')
 
@@ -336,14 +337,14 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='pending')
     def pending_leaves(self, request):
-        if request.user.role not in ['superadmin', 'admin', 'manager']:
+        if not can_manage_people(request.user):
             return Response({"detail": "Access denied."}, status=status.HTTP_403_FORBIDDEN)
         queryset = LeaveRequest.objects.filter(status='Pending').order_by('-created_at')
         return Response(LeaveRequestSerializer(queryset, many=True).data)
 
     @action(detail=True, methods=['patch'], url_path='approve')
     def approve(self, request, pk=None):
-        if request.user.role not in ['superadmin', 'admin', 'manager']:
+        if not can_manage_people(request.user):
             return Response({"detail": "Access denied."}, status=status.HTTP_403_FORBIDDEN)
         leave = self.get_object()
         leave.status = 'Approved'
@@ -351,11 +352,16 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
         leave.approved_at = timezone.now()
         leave.notes = request.data.get('notes', leave.notes)
         leave.save()
+        _tell_user(
+            leave.user,
+            'Leave approved',
+            f"Your {leave.leave_type} leave from {leave.start_date} to {leave.end_date} was approved.",
+        )
         return Response(LeaveRequestSerializer(leave).data)
 
     @action(detail=True, methods=['patch'], url_path='reject')
     def reject(self, request, pk=None):
-        if request.user.role not in ['superadmin', 'admin', 'manager']:
+        if not can_manage_people(request.user):
             return Response({"detail": "Access denied."}, status=status.HTTP_403_FORBIDDEN)
         leave = self.get_object()
         leave.status = 'Rejected'
@@ -363,6 +369,11 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
         leave.approved_at = timezone.now()
         leave.notes = request.data.get('notes', leave.notes)
         leave.save()
+        _tell_user(
+            leave.user,
+            'Leave not approved',
+            f"Your {leave.leave_type} leave from {leave.start_date} to {leave.end_date} was not approved.",
+        )
         return Response(LeaveRequestSerializer(leave).data)
 
 class DailyWorkLogViewSet(viewsets.ModelViewSet):
@@ -370,7 +381,7 @@ class DailyWorkLogViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        if self.request.user.role in ['superadmin', 'admin', 'manager']:
+        if can_manage_people(self.request.user):
             return DailyWorkLog.objects.all().order_by('-date', '-created_at')
         return DailyWorkLog.objects.filter(user=self.request.user).order_by('-date', '-created_at')
 
@@ -384,8 +395,36 @@ class DailyWorkLogViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='all')
     def all_logs(self, request):
-        if request.user.role not in ['superadmin', 'admin', 'manager']:
+        if not can_manage_people(request.user):
             return Response({"detail": "Access denied."}, status=status.HTTP_403_FORBIDDEN)
         queryset = DailyWorkLog.objects.all().order_by('-created_at')
         return Response(DailyWorkLogSerializer(queryset, many=True).data)
+
+
+class RegisterDeviceView(APIView):
+    """Store the phone's push token. Email reminders keep working without it."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        token = (request.data.get('token') or '').strip()
+        if not token:
+            return Response({'detail': 'token is required'}, status=status.HTTP_400_BAD_REQUEST)
+        request.user.fcm_token = token[:512]
+        request.user.save(update_fields=['fcm_token'])
+        return Response({'ok': True})
+
+
+def _tell_user(user, title, message):
+    try:
+        from apps.notifications.models import Notification
+        Notification.objects.create(
+            user=user,
+            title=title,
+            message=message,
+            notification_type='System',
+            related_url='/team',
+        )
+    except Exception:
+        log.warning('Could not notify %s about leave', getattr(user, 'email', user))
 

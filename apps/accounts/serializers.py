@@ -6,16 +6,27 @@ User = get_user_model()
 
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False)
+    modules = serializers.SerializerMethodField()
+    desk = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = (
-            'id', 'email', 'full_name', 'phone', 'role', 
-            'department', 'avatar', 'is_active', 'is_online', 
-            'last_seen', 'date_joined', 'whatsapp_number', 
-            'notification_preferences', 'password', 'custom_permissions'
+            'id', 'email', 'full_name', 'phone', 'role',
+            'department', 'avatar', 'is_active', 'is_online',
+            'last_seen', 'date_joined', 'whatsapp_number',
+            'notification_preferences', 'password', 'custom_permissions',
+            'modules', 'desk',
         )
         read_only_fields = ('id', 'date_joined', 'last_seen')
+
+    def get_modules(self, obj):
+        from .access import modules_for
+        return sorted(modules_for(obj))
+
+    def get_desk(self, obj):
+        from .access import desk_for
+        return desk_for(obj)
 
     def create(self, validated_data):
         password = validated_data.pop('password', 'DpsUser@123')

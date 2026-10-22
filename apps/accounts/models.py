@@ -23,11 +23,13 @@ class User(AbstractUser):
         ('superadmin', 'Super Admin'),
         ('admin', 'Admin'),
         ('manager', 'Manager'),
+        ('hr', 'HR'),
         ('developer', 'Developer'),
         ('designer', 'Designer'),
         ('marketer', 'Marketer'),
         ('support', 'Support'),
         ('finance', 'Finance'),
+        ('intern', 'Tester intern'),
     )
     
     # Disable default username, use email as unique identifier
@@ -43,7 +45,7 @@ class User(AbstractUser):
     is_online = models.BooleanField(default=False)
     last_seen = models.DateTimeField(null=True, blank=True)
     
-    fcm_token = models.CharField(max_length=255, blank=True)
+    fcm_token = models.CharField(max_length=512, blank=True)
     whatsapp_number = models.CharField(max_length=50, blank=True)
     notification_preferences = models.JSONField(default=dict, blank=True)
     custom_permissions = models.JSONField(default=list, blank=True)
@@ -153,5 +155,34 @@ class UserOTP(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.otp} - {self.purpose}"
+
+
+class InternProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='intern_profile')
+    location = models.CharField(max_length=255, blank=True)
+    focus = models.CharField(max_length=80, default='Tester')
+
+    def __str__(self):
+        return self.user.email
+
+
+class TestReport(models.Model):
+    STATUS_CHOICES = (
+        ('Open', 'Open'),
+        ('Fixed', 'Fixed'),
+    )
+    author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='test_reports')
+    title = models.CharField(max_length=255)
+    area = models.CharField(max_length=255, blank=True)
+    detail = models.TextField()
+    location = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Open')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title
 
 

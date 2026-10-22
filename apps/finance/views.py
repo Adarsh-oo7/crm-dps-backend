@@ -8,7 +8,7 @@ from django.db.models import Sum, Count, Q
 from django.shortcuts import get_object_or_404
 import datetime
 
-from .models import Proposal, Invoice, Payment, Expense, Quotation
+from .models import Proposal, Invoice, Payment, Expense, Quotation, GearItem, RentalEstimate
 from .serializers import (
     ProposalSerializer, InvoiceSerializer, PaymentSerializer,
     ExpenseSerializer, QuotationSerializer
@@ -137,8 +137,11 @@ def finance_summary(request):
     today = timezone.localdate()
     start_of_month = today.replace(day=1)
     
-    # 1. Total Invoiced this month
-    total_invoiced = Invoice.objects.filter(
+    agency_invoices = Invoice.objects.exclude(currency='INR')
+    rental_invoices = Invoice.objects.filter(currency='INR')
+
+    # 1. Total Invoiced this month (agency currency, kept apart from rupee rentals)
+    total_invoiced = agency_invoices.filter(
         invoice_date__gte=start_of_month,
         invoice_date__lte=today
     ).aggregate(total=Sum('total_amount'))['total'] or 0.0
@@ -147,36 +150,46 @@ def finance_summary(request):
     total_collected = Payment.objects.filter(
         payment_date__gte=datetime.datetime.combine(start_of_month, datetime.time.min),
         payment_date__lte=timezone.now()
-    ).aggregate(total=Sum('amount'))['total'] or 0.0
+    ).exclude(invoice__currency='INR').aggregate(total=Sum('amount'))['total'] or 0.0
 
     # 3. Outstanding Payments
-    outstanding = Invoice.objects.filter(
+    outstanding = agency_invoices.filter(
         ~Q(status='Paid') & ~Q(status='Cancelled')
     ).aggregate(total=Sum('total_amount'))['total'] or 0.0
     
     # Subtract paid parts from outstanding
     total_paid_on_outstanding = Payment.objects.filter(
         invoice__status__in=['Sent', 'Partially Paid', 'Overdue']
-    ).aggregate(total=Sum('amount'))['total'] or 0.0
+    ).exclude(invoice__currency='INR').aggregate(total=Sum('amount'))['total'] or 0.0
     
     outstanding_final = max(0.0, float(outstanding) - float(total_paid_on_outstanding))
 
-    # 4. Expenses this month
+    # 4. Expenses this month, excluding rupee project purchases
     total_expenses = Expense.objects.filter(
         expense_date__gte=start_of_month,
         expense_date__lte=today,
         status='Approved'
-    ).aggregate(total=Sum('amount'))['total'] or 0.0
+    ).exclude(currency='INR').aggregate(total=Sum('amount'))['total'] or 0.0
 
     # 5. Profit this month
     profit = float(total_collected) - float(total_expenses)
+    gaming_invoiced = rental_invoices.filter(
+        invoice_date__gte=start_of_month, invoice_date__lte=today
+    ).aggregate(total=Sum('total_amount'))['total'] or 0
+    gaming_collected = Payment.objects.filter(
+        invoice__currency='INR',
+        payment_date__gte=datetime.datetime.combine(start_of_month, datetime.time.min),
+        payment_date__lte=timezone.now(),
+    ).aggregate(total=Sum('amount'))['total'] or 0
 
     return Response({
         "total_invoiced_this_month": total_invoiced,
         "total_collected_this_month": total_collected,
         "outstanding_payments": outstanding_final,
         "expenses_this_month": total_expenses,
-        "profit_this_month": profit
+        "profit_this_month": profit,
+        "gaming_invoiced_this_month": gaming_invoiced,
+        "gaming_collected_this_month": gaming_collected,
     })
 
 
@@ -198,13 +211,13 @@ def revenue_chart(request):
             invoice_date__year=year,
             invoice_date__month=month,
             status__in=['Sent', 'Partially Paid', 'Paid', 'Overdue']
-        ).aggregate(total=Sum('total_amount'))['total'] or 0.0
+        ).exclude(currency='INR').aggregate(total=Sum('total_amount'))['total'] or 0.0
 
         expenses_val = Expense.objects.filter(
             expense_date__year=year,
             expense_date__month=month,
             status='Approved'
-        ).aggregate(total=Sum('amount'))['total'] or 0.0
+        ).exclude(currency='INR').aggregate(total=Sum('amount'))['total'] or 0.0
 
         chart_data.append({
             "month": label,
@@ -223,3 +236,59 @@ def outstanding_invoices(request):
         status__in=['Sent', 'Partially Paid', 'Overdue']
     ).order_by('due_date')
     return Response(InvoiceSerializer(invoices, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def project_money(request):
+    from .rentals import ensure_gaming_hub, project_money_rows, seed_sooryadev_bill
+    ensure_gaming_hub(request.user)
+    seed_sooryadev_bill(request.user)
+    return Response(project_money_rows())
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def rentals(request):
+    from .rentals import create_rental, rental_payload, seed_sooryadev_bill
+    seed_sooryadev_bill(request.user)
+    if request.method == 'POST':
+        try:
+            estimate = create_rental(request.user, request.data)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(rental_payload(estimate), status=status.HTTP_201_CREATED)
+    rows = RentalEstimate.objects.prefetch_related('lines', 'invoice__payments').select_related('project', 'invoice', 'created_by')
+    return Response([rental_payload(row) for row in rows])
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def collect(request):
+    from .rentals import collect_money
+    try:
+        payment = collect_money(request.user, request.data)
+    except ValueError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def update_gear(request, pk):
+    item = get_object_or_404(GearItem, pk=pk)
+    if 'quantity' in request.data:
+        item.quantity = int(request.data['quantity'])
+    if 'daily_rate' in request.data:
+        item.daily_rate = request.data['daily_rate']
+    if 'name' in request.data:
+        item.name = request.data['name']
+    item.save()
+    return Response({
+        'id': item.id,
+        'name': item.name,
+        'kind': item.kind,
+        'quantity': item.quantity,
+        'daily_rate': item.daily_rate,
+        'notes': item.notes,
+    })

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
@@ -50,8 +52,8 @@ class ProposalLineItem(models.Model):
 
     def save(self, *args, **kwargs):
         subtotal = self.quantity * self.unit_price
-        discount = subtotal * (self.discount_percent / 100)
-        tax = (subtotal - discount) * (self.tax_percent / 100)
+        discount = subtotal * (Decimal(self.discount_percent) / Decimal('100'))
+        tax = (subtotal - discount) * (Decimal(self.tax_percent) / Decimal('100'))
         self.total = subtotal - discount + tax
         super().save(*args, **kwargs)
 
@@ -94,9 +96,9 @@ class Invoice(models.Model):
 
     def recalculate_totals(self):
         items = self.line_items.all()
-        subtotal = sum(item.quantity * item.unit_price for item in items)
-        discount = sum((item.quantity * item.unit_price) * (item.discount_percent / 100) for item in items)
-        tax = sum(((item.quantity * item.unit_price) - ((item.quantity * item.unit_price) * (item.discount_percent / 100))) * (item.tax_percent / 100) for item in items)
+        subtotal = sum((item.quantity * item.unit_price for item in items), Decimal('0'))
+        discount = sum(((item.quantity * item.unit_price) * (Decimal(item.discount_percent) / Decimal('100')) for item in items), Decimal('0'))
+        tax = sum((((item.quantity * item.unit_price) - ((item.quantity * item.unit_price) * (Decimal(item.discount_percent) / Decimal('100')))) * (Decimal(item.tax_percent) / Decimal('100')) for item in items), Decimal('0'))
         
         self.subtotal = subtotal
         self.discount_amount = discount
@@ -120,8 +122,8 @@ class InvoiceLineItem(models.Model):
 
     def save(self, *args, **kwargs):
         subtotal = self.quantity * self.unit_price
-        discount = subtotal * (self.discount_percent / 100)
-        tax = (subtotal - discount) * (self.tax_percent / 100)
+        discount = subtotal * (Decimal(self.discount_percent) / Decimal('100'))
+        tax = (subtotal - discount) * (Decimal(self.tax_percent) / Decimal('100'))
         self.total = subtotal - discount + tax
         super().save(*args, **kwargs)
         # Recalculate parent invoice
@@ -163,6 +165,8 @@ class Expense(models.Model):
         ('Travel', 'Travel'),
         ('Legal', 'Legal'),
         ('Equipment', 'Equipment'),
+        ('Hardware', 'Hardware'),
+        ('Purchase', 'Purchase'),
         ('Other', 'Other'),
     )
     STATUS_CHOICES = (
@@ -231,7 +235,85 @@ class QuotationLineItem(models.Model):
 
     def save(self, *args, **kwargs):
         subtotal = self.quantity * self.unit_price
-        discount = subtotal * (self.discount_percent / 100)
-        tax = (subtotal - discount) * (self.tax_percent / 100)
+        discount = subtotal * (Decimal(self.discount_percent) / Decimal('100'))
+        tax = (subtotal - discount) * (Decimal(self.tax_percent) / Decimal('100'))
         self.total = subtotal - discount + tax
+        super().save(*args, **kwargs)
+
+
+class GearItem(models.Model):
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='gear')
+    name = models.CharField(max_length=255)
+    kind = models.CharField(max_length=40)
+    quantity = models.PositiveIntegerField(default=1)
+    daily_rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    notes = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ['kind', 'name']
+
+    def __str__(self):
+        return f"{self.quantity} × {self.name}"
+
+
+class RentalEstimate(models.Model):
+    STATUS_CHOICES = (
+        ('Advance requested', 'Advance requested'),
+        ('Confirmed', 'Confirmed'),
+        ('Delivered', 'Delivered'),
+        ('Closed', 'Closed'),
+        ('Cancelled', 'Cancelled'),
+    )
+    estimate_number = models.CharField(max_length=40, unique=True)
+    customer_name = models.CharField(max_length=255)
+    project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True, related_name='rentals')
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True, blank=True, related_name='rentals')
+    invoice = models.ForeignKey('Invoice', on_delete=models.SET_NULL, null=True, blank=True, related_name='rentals')
+    date_issued = models.DateField()
+    status = models.CharField(max_length=32, choices=STATUS_CHOICES, default='Advance requested')
+    delivery_location = models.CharField(max_length=255)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    advance_amount = models.DecimalField(max_digits=12, decimal_places=2, default=500)
+    phone = models.CharField(max_length=40, default='+91 94003 55185')
+    email = models.CharField(max_length=255, default='digitalproductkerala@gmail.com')
+    website = models.CharField(max_length=255, default='gaming.digitalproductsolutions.in')
+    pdf_file = models.FileField(upload_to='rentals/', null=True, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date_issued', '-id']
+
+    @property
+    def days(self):
+        span = (self.end_date - self.start_date).days
+        return span if span >= 1 else 1
+
+    @property
+    def subtotal(self):
+        return sum((line.amount for line in self.lines.all()), 0)
+
+    @property
+    def balance(self):
+        return self.subtotal - self.advance_amount
+
+    def __str__(self):
+        return f"{self.estimate_number} {self.customer_name}"
+
+
+class RentalLine(models.Model):
+    estimate = models.ForeignKey(RentalEstimate, on_delete=models.CASCADE, related_name='lines')
+    description = models.CharField(max_length=255)
+    quantity = models.DecimalField(max_digits=8, decimal_places=2, default=1)
+    days = models.PositiveIntegerField(default=1)
+    rate_per_day = models.DecimalField(max_digits=12, decimal_places=2)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'id']
+
+    def save(self, *args, **kwargs):
+        self.amount = self.quantity * self.days * self.rate_per_day
         super().save(*args, **kwargs)
