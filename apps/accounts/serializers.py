@@ -29,7 +29,7 @@ class UserSerializer(serializers.ModelSerializer):
         return desk_for(obj)
 
     def create(self, validated_data):
-        password = validated_data.pop('password', 'DpsUser@123')
+        password = (validated_data.pop('password', None) or '').strip() or 'DpsUser@123'
         user = User.objects.create(**validated_data)
         user.set_password(password)
         user.save()
@@ -39,13 +39,25 @@ class UserSerializer(serializers.ModelSerializer):
         password = validated_data.pop('password', None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-        if password:
-            instance.set_password(password)
+        if password and str(password).strip():
+            instance.set_password(str(password).strip())
         instance.save()
         return instance
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
+        raw_email = (attrs.get(self.username_field) or '').strip()
+        user = User.objects.filter(email__iexact=raw_email).first()
+        if not user and 'official' in raw_email.lower():
+            typo_email = raw_email.lower().replace('official', 'offical')
+            user = User.objects.filter(email__iexact=typo_email).first()
+        elif not user and 'offical' in raw_email.lower():
+            typo_email = raw_email.lower().replace('offical', 'official')
+            user = User.objects.filter(email__iexact=typo_email).first()
+
+        if user:
+            attrs[self.username_field] = user.email
+
         data = super().validate(attrs)
         
         # Add custom claims

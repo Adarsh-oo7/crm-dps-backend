@@ -25,7 +25,8 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         serializer = self.get_serializer(data=request.data)
         try:
             serializer.is_valid(raise_exception=True)
-        except Exception:
+        except Exception as e:
+            log.warning("Login failed for email '%s': %s", request.data.get("email"), e)
             return Response({"detail": "No active account found with the given credentials"}, status=status.HTTP_401_UNAUTHORIZED)
         
         user = serializer.user
