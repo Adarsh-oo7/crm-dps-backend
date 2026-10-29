@@ -47,16 +47,23 @@ class UserSerializer(serializers.ModelSerializer):
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         raw_email = (attrs.get(self.username_field) or '').strip()
-        user = User.objects.filter(email__iexact=raw_email).first()
-        if not user and 'official' in raw_email.lower():
-            typo_email = raw_email.lower().replace('official', 'offical')
-            user = User.objects.filter(email__iexact=typo_email).first()
-        elif not user and 'offical' in raw_email.lower():
-            typo_email = raw_email.lower().replace('offical', 'official')
-            user = User.objects.filter(email__iexact=typo_email).first()
+        candidates = [raw_email]
+        for base in list(candidates):
+            if 'official' in base.lower():
+                candidates.append(base.lower().replace('official', 'offical'))
+            if 'offical' in base.lower():
+                candidates.append(base.lower().replace('offical', 'official'))
+        for base in list(candidates):
+            if 'hrishi' in base.lower():
+                candidates.append(base.lower().replace('hrishi', 'hirshi'))
+            if 'hirshi' in base.lower():
+                candidates.append(base.lower().replace('hirshi', 'hrishi'))
 
-        if user:
-            attrs[self.username_field] = user.email
+        for candidate in candidates:
+            user = User.objects.filter(email__iexact=candidate).first()
+            if user:
+                attrs[self.username_field] = user.email
+                break
 
         data = super().validate(attrs)
         
