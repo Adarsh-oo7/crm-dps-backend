@@ -58,6 +58,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 candidates.append(base.lower().replace('hrishi', 'hirshi'))
             if 'hirshi' in base.lower():
                 candidates.append(base.lower().replace('hirshi', 'hrishi'))
+        for base in list(candidates):
+            if '@gmial.com' in base.lower():
+                candidates.append(base.lower().replace('@gmial.com', '@gmail.com'))
 
         for candidate in candidates:
             user = User.objects.filter(email__iexact=candidate).first()
