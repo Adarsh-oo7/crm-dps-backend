@@ -51,15 +51,15 @@ class NotificationViewSet(viewsets.ModelViewSet):
             "note": setting.email_automation_disabled_reason if not setting.email_automation_enabled else "",
             "updated_at": setting.updated_at,
             "updated_by": updater_name,
-            "can_toggle": request.user.role in ['superadmin', 'admin']
+            "can_toggle": request.user.role in ['superadmin', 'admin', 'manager']
         })
 
     # POST /api/notifications/toggle-automation/
     @action(detail=False, methods=['post'], url_path='toggle-automation')
     def toggle_automation(self, request):
-        if request.user.role not in ['superadmin', 'admin']:
+        if request.user.role not in ['superadmin', 'admin', 'manager']:
             return Response(
-                {"detail": "Only administrators can toggle email automation."},
+                {"detail": "Only administrators and managers can toggle email automation."},
                 status=status.HTTP_403_FORBIDDEN
             )
         setting = SystemNotificationSetting.get_settings()
