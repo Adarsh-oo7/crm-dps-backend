@@ -41,11 +41,22 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-FROM_EMAIL = "DPS OS <noreply@digitalprod.com>"
+from django.conf import settings
+FROM_EMAIL = settings.DEFAULT_FROM_EMAIL
+
+
+def is_email_automation_enabled():
+    """Check if admin has enabled or paused global automated emails."""
+    try:
+        from apps.notifications.models import SystemNotificationSetting
+        return SystemNotificationSetting.get_settings().email_automation_enabled
+    except Exception as e:
+        log.warning(f"Could not check email automation setting: {e}")
+        return True
 
 
 def _create_notification(user, title, message, ntype='System', url=None):
-    """Create in-app notification for a user."""
+    """Create one in-app notification. Saving it also sends SMTP and push."""
     try:
         Notification.objects.create(
             user=user,
@@ -54,8 +65,20 @@ def _create_notification(user, title, message, ntype='System', url=None):
             notification_type=ntype,
             related_url=url or '',
         )
+        return True
     except Exception as e:
         log.warning(f"Could not create notification for {user.email}: {e}")
+        return False
+
+
+def _notify_once(user, kind, title, message, ntype='System', url='/dashboard'):
+    """Send at most one reminder of this kind to this person today."""
+    from apps.notifications.models import ReminderLog
+    today = timezone.localdate()
+    _, created = ReminderLog.objects.get_or_create(user=user, kind=kind[:40], sent_on=today)
+    if not created:
+        return False
+    return _create_notification(user, title, message, ntype, url)
 
 
 # ─── 1. Follow-up reminders ───────────────────────────────────────────────────
@@ -68,31 +91,23 @@ def send_followup_reminders():
     ).select_related('assigned_to')
 
     count = 0
-    for f in followups:
-        if not f.assigned_to or not f.assigned_to.email:
+    for item in followups:
+        person = item.assigned_to
+        if not person or not person.email:
             continue
-        subject = f"📅 Follow-up Reminder: {f.title}"
-        body = (
-            f"Hi {f.assigned_to.full_name},\n\n"
-            f"You have a follow-up scheduled for TODAY:\n\n"
-            f"  Title    : {f.title}\n"
-            f"  Type     : {f.follow_up_type}\n"
-            f"  Time     : {f.scheduled_at.strftime('%I:%M %p')}\n"
-            f"  Related  : {f.related_to_type}\n\n"
-            f"Log in to DPS OS to mark it complete: https://dps-os.vercel.app/followups\n\n"
-            f"— DPS OS Automated Reminder"
+        when = timezone.localtime(item.scheduled_at).strftime('%I:%M %p')
+        sent = _notify_once(
+            person,
+            f'followup-{item.id}',
+            f'Follow-up today: {item.title}',
+            f'{item.follow_up_type} at {when}. Related to {item.related_to_type}. Open Follow-ups and mark it done.',
+            'Follow-up',
+            '/followups',
         )
-        try:
-            send_mail(subject, body, FROM_EMAIL, [f.assigned_to.email], fail_silently=False)
-            _create_notification(f.assigned_to, subject, f.title, 'Follow-up', '/followups')
-            count += 1
-        except Exception as e:
-            log.error(f"Failed to email {f.assigned_to.email}: {e}")
-
-    log.info(f"Sent {count}/{followups.count()} follow-up reminder emails.")
+        count += int(sent)
+    log.info(f"Sent {count}/{followups.count()} follow-up reminders.")
 
 
-# ─── 2. Task due reminders ────────────────────────────────────────────────────
 def send_task_reminders():
     log.info("=== Sending task due reminders ===")
     today = timezone.localdate()
@@ -102,34 +117,149 @@ def send_task_reminders():
     ).select_related('assigned_to', 'project')
 
     count = 0
-    for t in tasks:
-        if not t.assigned_to or not t.assigned_to.email:
+    for task in tasks:
+        person = task.assigned_to
+        if not person or not person.email:
             continue
-        project_name = t.project.name if t.project else 'Standalone Task'
-        subject = f"⚠️ Task Due Today: {t.title}"
-        body = (
-            f"Hi {t.assigned_to.full_name},\n\n"
-            f"Your task is due TODAY:\n\n"
-            f"  Task     : {t.title}\n"
-            f"  Project  : {project_name}\n"
-            f"  Priority : {t.priority}\n"
-            f"  Status   : {t.status}\n\n"
-            f"Log in to DPS OS to update it: https://dps-os.vercel.app/tasks\n\n"
-            f"— DPS OS Automated Reminder"
+        project_name = task.project.name if task.project else 'Standalone task'
+        sent = _notify_once(
+            person,
+            f'task-{task.id}',
+            f'Task due today: {task.title}',
+            f'{project_name}. Priority {task.priority}. Status {task.status}.',
+            'Task',
+            '/tasks',
         )
-        try:
-            send_mail(subject, body, FROM_EMAIL, [t.assigned_to.email], fail_silently=False)
-            _create_notification(t.assigned_to, subject, t.title, 'Task', '/tasks')
-            count += 1
-        except Exception as e:
-            log.error(f"Failed to email {t.assigned_to.email}: {e}")
+        count += int(sent)
+    log.info(f"Sent {count}/{tasks.count()} task reminders.")
 
-    log.info(f"Sent {count}/{tasks.count()} task reminder emails.")
+
+def send_punch_in_reminders():
+    """Morning nudge for anyone who has not punched in and is not on approved leave."""
+    from apps.accounts.models import Attendance, LeaveRequest
+    log.info("=== Punch-in reminders ===")
+    today = timezone.localdate()
+    on_leave = set(LeaveRequest.objects.filter(
+        status='Approved', start_date__lte=today, end_date__gte=today,
+    ).values_list('user_id', flat=True))
+    punched = set(Attendance.objects.filter(date=today, check_in__isnull=False).values_list('user_id', flat=True))
+    people = User.objects.filter(is_active=True).exclude(id__in=on_leave | punched)
+    count = 0
+    missing_names = []
+    for person in people:
+        missing_names.append(person.full_name or person.email)
+        if _notify_once(
+            person,
+            'punch-in',
+            'Punch in to start your day',
+            'You have not punched in yet. Open DPS and tap Punch in so today’s hours count.',
+            'System',
+            '/dashboard',
+        ):
+            count += 1
+    hr_people = User.objects.filter(role__in=['hr', 'admin', 'superadmin'], is_active=True)
+    if missing_names:
+        preview = ', '.join(missing_names[:12])
+        extra = f' and {len(missing_names) - 12} more' if len(missing_names) > 12 else ''
+        for hr in hr_people:
+            _notify_once(
+                hr,
+                'hr-floor',
+                f'{len(missing_names)} people have not punched in',
+                preview + extra,
+                'System',
+                '/people',
+            )
+    log.info(f"Punch-in reminders sent to {count} people. Missing: {len(missing_names)}.")
+
+
+def send_punch_out_reminders():
+    from apps.accounts.models import Attendance
+    log.info("=== Punch-out reminders ===")
+    today = timezone.localdate()
+    open_rows = Attendance.objects.filter(date=today, check_in__isnull=False, check_out__isnull=True).select_related('user')
+    count = 0
+    for row in open_rows:
+        if _notify_once(
+            row.user,
+            'punch-out',
+            'Remember to punch out',
+            'You are still punched in. Punch out before you leave so today’s hours close properly.',
+            'System',
+            '/dashboard',
+        ):
+            count += 1
+    log.info(f"Punch-out reminders sent to {count} people.")
+
+
+def send_worklog_reminders():
+    from apps.accounts.models import Attendance, DailyWorkLog
+    log.info("=== Work log reminders ===")
+    today = timezone.localdate()
+    logged = set(DailyWorkLog.objects.filter(date=today).values_list('user_id', flat=True))
+    rows = Attendance.objects.filter(date=today).exclude(user_id__in=logged).select_related('user')
+    count = 0
+    for row in rows:
+        if _notify_once(
+            row.user,
+            'work-log',
+            'Write today’s work log',
+            'You punched in today and have not written a work log yet. Add it before the day closes.',
+            'System',
+            '/team',
+        ):
+            count += 1
+    log.info(f"Work log reminders sent to {count} people.")
+
+
+def send_collection_reminders():
+    from apps.finance.models import Invoice
+    log.info("=== Collection reminders ===")
+    today = timezone.localdate()
+    overdue_qs = Invoice.objects.filter(status='Overdue').select_related('client')
+    overdue_count = overdue_qs.count()
+    overdue = list(overdue_qs[:12])
+    if overdue_count == 0:
+        log.info("No overdue invoices.")
+        return
+    names = ', '.join(f"{row.invoice_number} ({row.client.company_name})" for row in overdue)
+    recipients = User.objects.filter(role__in=['finance', 'admin', 'superadmin'], is_active=True)
+    count = 0
+    for person in recipients:
+        if _notify_once(
+            person,
+            'collections',
+            f'{overdue_count} invoices need a chase',
+            names,
+            'Invoice',
+            '/finance',
+        ):
+            count += 1
+    log.info(f"Collection reminders sent to {count} people.")
+
+
+def morning():
+    if not is_email_automation_enabled():
+        log.warning("NOTE: Email automation is turned OFF by admin. Reminders are in-app only, no emails will be sent.")
+    send_punch_in_reminders()
+    send_followup_reminders()
+    send_task_reminders()
+    send_collection_reminders()
+
+
+def evening():
+    if not is_email_automation_enabled():
+        log.warning("NOTE: Email automation is turned OFF by admin. Reminders are in-app only, no emails will be sent.")
+    send_punch_out_reminders()
+    send_worklog_reminders()
 
 
 # ─── 3. Expiry alerts (domains, SSL, hosting) ─────────────────────────────────
 def check_expiries():
     log.info("=== Checking infrastructure expiries ===")
+    if not is_email_automation_enabled():
+        log.warning("NOTE: Email automation is turned OFF by admin. Skipping expiry email alerts.")
+        return
     today = timezone.localdate()
     admin_emails = list(User.objects.filter(role__in=['superadmin', 'admin'], is_active=True).values_list('email', flat=True))
 
@@ -166,6 +296,9 @@ def check_expiries():
 # ─── 4. Weekly digest ─────────────────────────────────────────────────────────
 def send_weekly_digest():
     log.info("=== Sending weekly digest ===")
+    if not is_email_automation_enabled():
+        log.warning("NOTE: Email automation is turned OFF by admin. Skipping weekly digest email.")
+        return
     from django.utils import timezone as tz
     now = tz.now()
     week_ago = now - datetime.timedelta(days=7)
@@ -223,6 +356,9 @@ Login to DPS OS: https://dps-os.vercel.app/dashboard
 
 def send_eod_report():
     log.info("=== Generating and Sending End of Day (EOD) Report ===")
+    if not is_email_automation_enabled():
+        log.warning("NOTE: Email automation is turned OFF by admin. Skipping EOD report email.")
+        return
     today = timezone.localdate()
     
     # 1. Fetch Attendance for Today
@@ -310,11 +446,16 @@ def send_eod_report():
 JOBS = {
     'followup_reminders': send_followup_reminders,
     'task_reminders':     send_task_reminders,
+    'punch_in':           send_punch_in_reminders,
+    'punch_out':          send_punch_out_reminders,
+    'work_logs':          send_worklog_reminders,
+    'collections':        send_collection_reminders,
+    'morning':            morning,
+    'evening':            evening,
     'check_expiries':     check_expiries,
     'weekly_digest':      send_weekly_digest,
     'eod_report':         send_eod_report,
-    # Legacy aliases
-    'daily_reminders':    lambda: (send_followup_reminders(), send_task_reminders()),
+    'daily_reminders':    morning,
 }
 
 if __name__ == '__main__':
