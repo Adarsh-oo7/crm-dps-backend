@@ -40,12 +40,16 @@ class Notification(models.Model):
             return
 
         # Check global email automation setting
-        email_allowed = True
+        email_allowed = False
         try:
-            settings_obj = SystemNotificationSetting.get_settings()
-            email_allowed = settings_obj.email_automation_enabled
+            from django.conf import settings as dj_settings
+            if getattr(dj_settings, 'EMAIL_AUTOMATION_ENABLED', None) is False:
+                email_allowed = False
+            else:
+                settings_obj = SystemNotificationSetting.get_settings()
+                email_allowed = bool(settings_obj.email_automation_enabled)
         except Exception:
-            email_allowed = True
+            email_allowed = False
 
         prefs = getattr(self.user, 'notification_preferences', None) or {}
         if email_allowed and prefs.get('email', True) is not False and self.user.email:
@@ -81,7 +85,7 @@ class Notification(models.Model):
 class SystemNotificationSetting(models.Model):
     """Global system-wide notification & automation settings."""
     email_automation_enabled = models.BooleanField(
-        default=True,
+        default=False,
         help_text="Master switch: if False, automated emails (reminders, cron jobs, notifications) are paused."
     )
     email_automation_disabled_reason = models.CharField(

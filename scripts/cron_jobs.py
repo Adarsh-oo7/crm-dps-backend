@@ -48,11 +48,14 @@ FROM_EMAIL = settings.DEFAULT_FROM_EMAIL
 def is_email_automation_enabled():
     """Check if admin has enabled or paused global automated emails."""
     try:
+        from django.conf import settings as dj_settings
+        if getattr(dj_settings, 'EMAIL_AUTOMATION_ENABLED', None) is False:
+            return False
         from apps.notifications.models import SystemNotificationSetting
-        return SystemNotificationSetting.get_settings().email_automation_enabled
+        return bool(SystemNotificationSetting.get_settings().email_automation_enabled)
     except Exception as e:
         log.warning(f"Could not check email automation setting: {e}")
-        return True
+        return False
 
 
 def _create_notification(user, title, message, ntype='System', url=None):
@@ -84,6 +87,9 @@ def _notify_once(user, kind, title, message, ntype='System', url='/dashboard'):
 # ─── 1. Follow-up reminders ───────────────────────────────────────────────────
 def send_followup_reminders():
     log.info("=== Sending follow-up reminders ===")
+    if not is_email_automation_enabled():
+        log.info("Email automation is turned OFF by admin. Skipping follow-up reminders.")
+        return
     today = timezone.localdate()
     followups = FollowUp.objects.filter(
         scheduled_at__date=today,
@@ -110,6 +116,9 @@ def send_followup_reminders():
 
 def send_task_reminders():
     log.info("=== Sending task due reminders ===")
+    if not is_email_automation_enabled():
+        log.info("Email automation is turned OFF by admin. Skipping task reminders.")
+        return
     today = timezone.localdate()
     tasks = Task.objects.filter(
         due_date__date=today,
@@ -138,6 +147,9 @@ def send_punch_in_reminders():
     """Morning nudge for anyone who has not punched in and is not on approved leave."""
     from apps.accounts.models import Attendance, LeaveRequest
     log.info("=== Punch-in reminders ===")
+    if not is_email_automation_enabled():
+        log.info("Email automation is turned OFF by admin. Skipping punch-in reminders.")
+        return
     today = timezone.localdate()
     on_leave = set(LeaveRequest.objects.filter(
         status='Approved', start_date__lte=today, end_date__gte=today,
@@ -176,6 +188,9 @@ def send_punch_in_reminders():
 def send_punch_out_reminders():
     from apps.accounts.models import Attendance
     log.info("=== Punch-out reminders ===")
+    if not is_email_automation_enabled():
+        log.info("Email automation is turned OFF by admin. Skipping punch-out reminders.")
+        return
     today = timezone.localdate()
     open_rows = Attendance.objects.filter(date=today, check_in__isnull=False, check_out__isnull=True).select_related('user')
     count = 0
@@ -195,6 +210,9 @@ def send_punch_out_reminders():
 def send_worklog_reminders():
     from apps.accounts.models import Attendance, DailyWorkLog
     log.info("=== Work log reminders ===")
+    if not is_email_automation_enabled():
+        log.info("Email automation is turned OFF by admin. Skipping work log reminders.")
+        return
     today = timezone.localdate()
     logged = set(DailyWorkLog.objects.filter(date=today).values_list('user_id', flat=True))
     rows = Attendance.objects.filter(date=today).exclude(user_id__in=logged).select_related('user')
@@ -215,6 +233,9 @@ def send_worklog_reminders():
 def send_collection_reminders():
     from apps.finance.models import Invoice
     log.info("=== Collection reminders ===")
+    if not is_email_automation_enabled():
+        log.info("Email automation is turned OFF by admin. Skipping collection reminders.")
+        return
     today = timezone.localdate()
     overdue_qs = Invoice.objects.filter(status='Overdue').select_related('client')
     overdue_count = overdue_qs.count()
@@ -240,7 +261,8 @@ def send_collection_reminders():
 
 def morning():
     if not is_email_automation_enabled():
-        log.warning("NOTE: Email automation is turned OFF by admin. Reminders are in-app only, no emails will be sent.")
+        log.warning("NOTE: Email automation is turned OFF by admin. Skipping all morning reminders.")
+        return
     send_punch_in_reminders()
     send_followup_reminders()
     send_task_reminders()
@@ -249,7 +271,8 @@ def morning():
 
 def evening():
     if not is_email_automation_enabled():
-        log.warning("NOTE: Email automation is turned OFF by admin. Reminders are in-app only, no emails will be sent.")
+        log.warning("NOTE: Email automation is turned OFF by admin. Skipping all evening reminders.")
+        return
     send_punch_out_reminders()
     send_worklog_reminders()
 

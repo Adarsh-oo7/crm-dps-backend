@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'apps.servers',
     'apps.products',
     'apps.whatsapp',
+    'apps.office',
 ]
 
 MIDDLEWARE = [
@@ -56,6 +57,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'apps.accounts.gates.ModuleGateMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -110,7 +112,7 @@ AUTH_USER_MODEL = 'accounts.User'
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Kolkata'
 USE_I18N = True
 USE_TZ = True
 
@@ -132,6 +134,10 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_THROTTLE_RATES': {
+        'user': '2000/hour',
+        'whatsapp_send': '120/min',
+    },
 }
 
 # Simple JWT Configuration
@@ -160,6 +166,8 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='DPS OS <noreply@digitalprod.com>')
+EMAIL_AUTOMATION_ENABLED = config('EMAIL_AUTOMATION_ENABLED', default=True, cast=bool)
+FCM_SERVER_KEY = config('FCM_SERVER_KEY', default='')
 
 # WhatsApp Cloud API (Meta)
 WHATSAPP_ACCESS_TOKEN = config('WHATSAPP_ACCESS_TOKEN', default='')
